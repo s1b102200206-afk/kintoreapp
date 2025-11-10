@@ -4,6 +4,7 @@ import tensorflow_hub as hub
 import numpy as np
 import cv2
 import tempfile
+from moviepy.editor import ImageSequenceClip
 
 # --- MoveNet読み込み ---
 @st.cache_resource
@@ -13,7 +14,7 @@ def load_movenet():
 
 movenet = load_movenet()
 
-# --- 角度計算関数 ---
+# --- 角度計算 ---
 def calculate_angle(a, b):
     a, b = np.array(a), np.array(b)
     vertical = np.array([0, -1])
@@ -50,10 +51,7 @@ def analyze_frame(frame, mode="shallow"):
 
     # コメント生成
     if mode=="shallow":
-        if knee_angle <= 90:
-            knee_comment = "深め注意"
-        else:
-            knee_comment = "浅めOK" if knee_angle > 100 else "少し浅め"
+        knee_comment = "深め注意" if knee_angle <= 90 else "浅めOK" if knee_angle > 100 else "少し浅め"
     else:
         knee_comment = "深めOK" if knee_angle < 80 else "もう少し深く" if knee_angle < 100 else "浅すぎ"
     back_comment = "背中まっすぐ" if back_angle < 15 else f"背中曲がり({int(back_angle)}°)"
@@ -74,7 +72,7 @@ def analyze_frame(frame, mode="shallow"):
     cv2.putText(orig, f"下半身: {knee_comment}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0), 2)
     cv2.putText(orig, f"上半身: {back_comment}", (10,60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
 
-    return orig
+    return cv2.cvtColor(orig, cv2.COLOR_BGR2RGB)  # moviepy 用に RGB 返す
 
 # --- Streamlit UI ---
 st.title("スクワット姿勢解析アプリ（動画出力版）")
@@ -88,14 +86,7 @@ if uploaded_file is not None:
     
     cap = cv2.VideoCapture(tfile.name)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    # 出力動画
-    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264形式
-    out = cv2.VideoWriter(out_file.name, fourcc, fps, (w,h))
-
+    frames = []
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     progress_text = st.empty()
 
@@ -103,12 +94,20 @@ if uploaded_file is not None:
         ret, frame = cap.read()
         if not ret:
             break
-        frame = analyze_frame(frame, mode)
-        out.write(frame)
+        analyzed_frame = analyze_frame(frame, mode)
+        frames.append(analyzed_frame)
         progress_text.text(f"解析中: {i+1}/{frame_count} フレーム")
-
+    
     cap.release()
-    out.release()
-
+    
     st.success("動画解析が完了しました！")
+
+    # moviepy で mp4 に変換
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    clip = ImageSequenceClip(frames, fps=fps)
+    clip.write_videofile(out_file.name, codec="libx264", audio=False)
+    
     st.video(out_file.name)
+
+
+   
