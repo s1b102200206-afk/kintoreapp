@@ -1,95 +1,115 @@
 import streamlit as st
-import cv2
-import tempfile
-import numpy as np
 import tensorflow as tf
 import tensorflow_hub as hub
-import os
+import numpy as np
+import cv2
+import tempfile
+from moviepy.editor import ImageSequenceClip
 
-st.title("🏋️ スクワット姿勢解析アプリ")
-st.write("動画をアップロードすると、膝の角度を解析し深め注意も表示します！")
-
-# モデル読み込み（キャッシュ）
+# --- MoveNet読み込み ---
 @st.cache_resource
-def load_model():
-    model = hub.load("https://tfhub.dev/google/movenet/singlepose/thunder/4")
-    return model
+def load_movenet():
+    model = hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
+    return model.signatures['serving_default']
 
-movenet = load_model()
+movenet = load_movenet()
 
-# 姿勢推定
-def detect_keypoints(frame):
-    input_image = tf.image.resize_with_pad(tf.expand_dims(frame, axis=0), 256, 256)
-    input_image = tf.cast(input_image, dtype=tf.int32)
-    outputs = movenet(input_image)
-    keypoints = outputs['output_0'].numpy()[0,0,:,:]  # 17 keypoints
-    return keypoints
+# --- 角度計算 ---
+def calculate_angle(a, b):
+    a, b = np.array(a), np.array(b)
+    vertical = np.array([0, -1])
+    spine = a - b
+    cosine_angle = np.dot(spine, vertical) / (np.linalg.norm(spine)*np.linalg.norm(vertical)+1e-6)
+    return np.degrees(np.arccos(np.clip(cosine_angle, -1.0, 1.0)))
 
-# 膝角度計算
-def calculate_angle(a, b, c):
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
-    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
-    angle = np.abs(radians*180.0/np.pi)
-    if angle > 180.0:
-        angle = 360 - angle
-    return angle
+# --- フレーム解析 ---
+def analyze_frame(frame, mode="shallow"):
+    orig = frame.copy()
+    img_resized = tf.image.resize_with_pad(tf.convert_to_tensor(frame), 192, 192)
+    input_img = tf.expand_dims(tf.cast(img_resized, dtype=tf.int32), axis=0)
+    keypoints = movenet(input_img)['output_0'].numpy()[0,0,:,:]
+    h, w, _ = orig.shape
 
-# ファイルアップロード
+    points = {}
+    kp_idx = {"left_shoulder":5,"right_shoulder":6,"left_hip":11,"right_hip":12,
+              "left_knee":13,"right_knee":14,"left_ankle":15,"right_ankle":16}
+    for name, idx in kp_idx.items():
+        points[name] = (keypoints[idx][1]*w, keypoints[idx][0]*h, keypoints[idx][2])
+    conf_thresh = 0.1
+
+    def angle(a,b,c):
+        a,b,c = np.array(a[:2]), np.array(b[:2]), np.array(c[:2])
+        ba, bc = a-b, c-b
+        return np.degrees(np.arccos(np.clip(np.dot(ba,bc)/(np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6), -1.0, 1.0)))
+
+    knee_angle = angle(points["left_hip"], points["left_knee"], points["left_ankle"])
+    mid_shoulder = ((points["left_shoulder"][0]+points["right_shoulder"][0])/2,
+                    (points["left_shoulder"][1]+points["right_shoulder"][1])/2)
+    mid_hip = ((points["left_hip"][0]+points["right_hip"][0])/2,
+               (points["left_hip"][1]+points["right_hip"][1])/2)
+    back_angle = calculate_angle(mid_shoulder, mid_hip)
+
+    # コメント生成
+    if mode=="shallow":
+        knee_comment = "深め注意" if knee_angle <= 90 else "浅めOK" if knee_angle > 100 else "少し浅め"
+    else:
+        knee_comment = "深めOK" if knee_angle < 80 else "もう少し深く" if knee_angle < 100 else "浅すぎ"
+    back_comment = "背中まっすぐ" if back_angle < 15 else f"背中曲がり({int(back_angle)}°)"
+
+    # 関節描画
+    for pt in points.values():
+        if pt[2] > conf_thresh:
+            cv2.circle(orig, tuple(map(int, pt[:2])), 5, (0,255,0), -1)
+    bones = [("left_shoulder","left_hip"),("right_shoulder","right_hip"),
+             ("left_hip","left_knee"),("left_knee","left_ankle"),
+             ("right_hip","right_knee"),("right_knee","right_ankle")]
+    for a,b in bones:
+        if points[a][2] > conf_thresh and points[b][2] > conf_thresh:
+            cv2.line(orig, tuple(map(int, points[a][:2])), tuple(map(int, points[b][:2])), (255,0,0), 2)
+    cv2.line(orig, tuple(map(int, mid_shoulder)), tuple(map(int, mid_hip)), (0,0,255), 2)
+
+    # コメント描画
+    cv2.putText(orig, f"下半身: {knee_comment}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0), 2)
+    cv2.putText(orig, f"上半身: {back_comment}", (10,60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+
+    return cv2.cvtColor(orig, cv2.COLOR_BGR2RGB)
+
+# --- Streamlit UI ---
+st.title("スクワット姿勢解析アプリ（動画再生＆ダウンロード）")
+mode = st.radio("解析モードを選択", ("shallow","deep"))
 uploaded_file = st.file_uploader("動画をアップロードしてください", type=["mp4","mov","avi"])
 
 if uploaded_file is not None:
-    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     tfile.write(uploaded_file.read())
+    tfile.close()
 
     cap = cv2.VideoCapture(tfile.name)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(3))
-    height = int(cap.get(4))
 
-    out_path = os.path.join(tempfile.gettempdir(), "squat_result.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
-
-    stframe = st.empty()
-    st.write("🔍 解析中です。しばらくお待ちください…")
-
-    while True:
+    frames = []
+    progress_text = st.empty()
+    for i in range(frame_count):
         ret, frame = cap.read()
         if not ret:
             break
-
-        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        keypoints = detect_keypoints(img_rgb)
-
-        # 座標取得
-        left_hip = keypoints[11][:2] * [width, height]
-        left_knee = keypoints[13][:2] * [width, height]
-        left_ankle = keypoints[15][:2] * [width, height]
-
-        angle = calculate_angle(left_hip, left_knee, left_ankle)
-
-        # 判定
-        if angle < 90:
-            text = f"深め注意！ {int(angle)}°"
-            color = (0,0,255)
-        else:
-            text = f"角度: {int(angle)}°"
-            color = (0,255,0)
-
-        # 表示
-        cv2.putText(frame, text, (50,100), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
-        out.write(frame)
-
-        stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB")
-
+        frames.append(analyze_frame(frame, mode))
+        progress_text.text(f"解析中: {i+1}/{frame_count} フレーム")
     cap.release()
-    out.release()
 
-    st.success("✅ 解析完了！")
-    with open(out_path, "rb") as f:
-        video_bytes = f.read()
-        st.video(video_bytes)
-        st.download_button("📥 結果動画をダウンロード", data=video_bytes, file_name="squat_result.mp4", mime="video/mp4")
+    # MoviePy で動画化
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    clip = ImageSequenceClip(frames, fps=fps)
+    clip.write_videofile(out_file.name, codec='libx264', audio=False, verbose=False, logger=None)
+
+    st.success("動画解析完了！")
+
+    # 動画再生
+    st.video(out_file.name)
+
+    # ダウンロードリンク
+    with open(out_file.name, "rb") as f:
+        st.download_button("解析動画をダウンロード", f, file_name="squat_analysis.mp4", mime="video/mp4")
+
 
