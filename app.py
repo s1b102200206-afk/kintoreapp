@@ -6,7 +6,7 @@ import cv2
 import tempfile
 from moviepy.editor import ImageSequenceClip
 
-# --- MoveNet ---
+# --- MoveNet 読み込み ---
 @st.cache_resource
 def load_movenet():
     model = hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
@@ -116,7 +116,3 @@ if uploaded_file is not None:
             file_name="squat_analysis.mp4",
             mime="video/mp4"
         )
-
-
-    
-
