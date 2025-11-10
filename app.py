@@ -48,7 +48,7 @@ def analyze_frame(frame, mode="shallow"):
                (points["left_hip"][1]+points["right_hip"][1])/2)
     back_angle = calculate_angle(mid_shoulder, mid_hip)
 
-    # コメント生成（浅めモードで膝90°以下なら深め注意）
+    # コメント生成
     if mode=="shallow":
         knee_comment = "深め注意" if knee_angle <= 90 else "浅めOK" if knee_angle > 100 else "少し浅め"
     else:
@@ -57,7 +57,7 @@ def analyze_frame(frame, mode="shallow"):
 
     # 関節描画
     for pt in points.values():
-        if pt[2] > conf_thresh: 
+        if pt[2] > conf_thresh:
             cv2.circle(orig, tuple(map(int, pt[:2])), 5, (0,255,0), -1)
     bones = [("left_shoulder","left_hip"),("right_shoulder","right_hip"),
              ("left_hip","left_knee"),("left_knee","left_ankle"),
@@ -82,14 +82,14 @@ if uploaded_file is not None:
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     tfile.write(uploaded_file.read())
     tfile.close()
-    
+
     cap = cv2.VideoCapture(tfile.name)
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')  # mp4互換
     out = cv2.VideoWriter(out_file.name, fourcc, fps, (width, height))
 
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -108,3 +108,6 @@ if uploaded_file is not None:
 
     st.success("動画解析が完了しました！")
     st.video(out_file.name)
+
+
+    
