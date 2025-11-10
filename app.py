@@ -4,9 +4,8 @@ import tensorflow_hub as hub
 import numpy as np
 import cv2
 import tempfile
-from moviepy.editor import ImageSequenceClip
 
-# --- MoveNet読み込み ---
+# --- MoveNet 読み込み ---
 @st.cache_resource
 def load_movenet():
     model = hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
@@ -72,7 +71,7 @@ def analyze_frame(frame, mode="shallow"):
     cv2.putText(orig, f"下半身: {knee_comment}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0), 2)
     cv2.putText(orig, f"上半身: {back_comment}", (10,60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
 
-    return cv2.cvtColor(orig, cv2.COLOR_BGR2RGB)
+    return orig
 
 # --- Streamlit UI ---
 st.title("スクワット姿勢解析アプリ（動画出力版）")
@@ -86,7 +85,13 @@ if uploaded_file is not None:
     
     cap = cv2.VideoCapture(tfile.name)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    frames = []
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(out_file.name, fourcc, fps, (width, height))
+
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     progress_text = st.empty()
 
@@ -95,16 +100,11 @@ if uploaded_file is not None:
         if not ret:
             break
         analyzed_frame = analyze_frame(frame, mode)
-        frames.append(analyzed_frame)
+        out.write(cv2.cvtColor(analyzed_frame, cv2.COLOR_RGB2BGR))
         progress_text.text(f"解析中: {i+1}/{frame_count} フレーム")
-    
-    cap.release()
-    
-    st.success("動画解析が完了しました！")
 
-    # moviepy で mp4 に変換
-    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    clip = ImageSequenceClip(frames, fps=fps)
-    clip.write_videofile(out_file.name, codec="libx264", audio=False)
-    
+    cap.release()
+    out.release()
+
+    st.success("動画解析が完了しました！")
     st.video(out_file.name)
