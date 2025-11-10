@@ -3,7 +3,7 @@ import tensorflow as tf
 import tensorflow_hub as hub
 import numpy as np
 import cv2
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import tempfile
 
 # --- MoveNet読み込み ---
@@ -49,7 +49,7 @@ def analyze_frame(frame, mode="shallow"):
                (points["left_hip"][1]+points["right_hip"][1])/2)
     back_angle = calculate_angle(mid_shoulder, mid_hip)
 
-    # コメント生成（膝角度の判定を修正）
+    # コメント生成（浅めモード対応）
     if mode=="shallow":
         if knee_angle <= 90:
             knee_comment = "深め注意"
@@ -57,7 +57,6 @@ def analyze_frame(frame, mode="shallow"):
             knee_comment = "浅めOK" if knee_angle > 100 else "少し浅め"
     else:
         knee_comment = "深めOK" if knee_angle < 80 else "もう少し深く" if knee_angle < 100 else "浅すぎ"
-
     back_comment = "背中まっすぐ" if back_angle < 15 else f"背中曲がり({int(back_angle)}°)"
 
     # 関節描画
@@ -72,32 +71,44 @@ def analyze_frame(frame, mode="shallow"):
             cv2.line(orig, tuple(map(int, points[a][:2])), tuple(map(int, points[b][:2])), (255,0,0), 2)
     cv2.line(orig, tuple(map(int, mid_shoulder)), tuple(map(int, mid_hip)), (0,0,255), 2)
 
-    return orig, (knee_comment, back_comment)
+    # コメント描画
+    cv2.putText(orig, f"下半身: {knee_comment}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0), 2)
+    cv2.putText(orig, f"上半身: {back_comment}", (10,60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+
+    return orig
 
 # --- Streamlit UI ---
-st.title("スクワット姿勢解析アプリ")
+st.title("スクワット姿勢解析アプリ（動画出力版）")
 mode = st.radio("解析モードを選択", ("shallow", "deep"))
-
 uploaded_file = st.file_uploader("動画をアップロードしてください", type=["mp4", "mov", "avi"])
 
 if uploaded_file is not None:
-    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     tfile.write(uploaded_file.read())
+    
     cap = cv2.VideoCapture(tfile.name)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    stframe = st.empty()
+    # 出力動画
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(out_file.name, fourcc, fps, (w,h))
 
-    while True:
+    progress_text = st.empty()
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    for i in range(frame_count):
         ret, frame = cap.read()
         if not ret:
             break
-        frame = cv2.resize(frame, (320, int(frame.shape[0]*320/frame.shape[1])))
-        result_img, comments = analyze_frame(frame, mode)
-        knee_comment, back_comment = comments
-
-        # Streamlitで表示
-        stframe.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), channels="RGB")
-        st.text(f"下半身: {knee_comment} / 上半身: {back_comment}")
-
+        frame = analyze_frame(frame, mode)
+        out.write(frame)
+        progress_text.text(f"解析中: {i+1}/{frame_count} フレーム")
+    
     cap.release()
+    out.release()
+    
     st.success("動画解析が完了しました！")
+    st.video(out_file.name)
