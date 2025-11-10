@@ -1,8 +1,6 @@
-streamlit==1.21.0
-tensorflow==2.19.0
-tensorflow-hub==0.14.0
-opencv-python==4.8.1.78
-numpy==1.27.4
-moviepy==1.0.3
-Pillow==10.1.0
+streamlit>=1.25.0
+tensorflow>=2.19.0
+tensorflow-hub>=0.13.0
+opencv-python>=4.7.0
+numpy>=1.25.0
 
