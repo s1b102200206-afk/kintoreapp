@@ -3,5 +3,4 @@ tensorflow
 tensorflow-hub
 opencv-python-headless
 numpy
-moviepy
 Pillow
