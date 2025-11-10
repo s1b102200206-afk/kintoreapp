@@ -4,8 +4,9 @@ import tensorflow_hub as hub
 import numpy as np
 import cv2
 import tempfile
+from moviepy.editor import ImageSequenceClip
 
-# --- MoveNet 読み込み ---
+# --- MoveNet ---
 @st.cache_resource
 def load_movenet():
     model = hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
@@ -18,7 +19,7 @@ def calculate_angle(a, b):
     a, b = np.array(a), np.array(b)
     vertical = np.array([0, -1])
     spine = a - b
-    cosine_angle = np.dot(spine, vertical) / (np.linalg.norm(spine) * np.linalg.norm(vertical) + 1e-6)
+    cosine_angle = np.dot(spine, vertical) / (np.linalg.norm(spine)*np.linalg.norm(vertical)+1e-6)
     return np.degrees(np.arccos(np.clip(cosine_angle, -1.0, 1.0)))
 
 # --- フレーム解析 ---
@@ -71,12 +72,12 @@ def analyze_frame(frame, mode="shallow"):
     cv2.putText(orig, f"下半身: {knee_comment}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,0,0), 2)
     cv2.putText(orig, f"上半身: {back_comment}", (10,60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
 
-    return orig
+    return cv2.cvtColor(orig, cv2.COLOR_BGR2RGB)
 
 # --- Streamlit UI ---
-st.title("スクワット姿勢解析アプリ（動画出力版）")
-mode = st.radio("解析モードを選択", ("shallow", "deep"))
-uploaded_file = st.file_uploader("動画をアップロードしてください", type=["mp4", "mov", "avi"])
+st.title("スクワット姿勢解析アプリ（動画再生＋ダウンロード）")
+mode = st.radio("解析モードを選択", ("shallow","deep"))
+uploaded_file = st.file_uploader("動画をアップロードしてください", type=["mp4","mov","avi"])
 
 if uploaded_file is not None:
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
@@ -84,30 +85,38 @@ if uploaded_file is not None:
     tfile.close()
 
     cap = cv2.VideoCapture(tfile.name)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')  # mp4互換
-    out = cv2.VideoWriter(out_file.name, fourcc, fps, (width, height))
-
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    progress_text = st.empty()
+    fps = cap.get(cv2.CAP_PROP_FPS)
 
+    frames = []
+    progress_text = st.empty()
     for i in range(frame_count):
         ret, frame = cap.read()
         if not ret:
             break
-        analyzed_frame = analyze_frame(frame, mode)
-        out.write(cv2.cvtColor(analyzed_frame, cv2.COLOR_RGB2BGR))
+        frames.append(analyze_frame(frame, mode))
         progress_text.text(f"解析中: {i+1}/{frame_count} フレーム")
-
     cap.release()
-    out.release()
 
-    st.success("動画解析が完了しました！")
+    # MoviePy で動画に変換
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    clip = ImageSequenceClip(frames, fps=fps)
+    clip.write_videofile(out_file.name, codec='libx264', audio=False)
+
+    st.success("動画解析完了！")
+
+    # 再生
     st.video(out_file.name)
+
+    # ダウンロードリンク
+    with open(out_file.name, "rb") as f:
+        st.download_button(
+            label="解析動画をダウンロード",
+            data=f,
+            file_name="squat_analysis.mp4",
+            mime="video/mp4"
+        )
 
 
     
+
