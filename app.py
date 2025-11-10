@@ -13,18 +13,20 @@ st.write("動画をアップロードすると、膝の角度を解析して注�
 @st.cache_resource
 def load_movenet():
     model = hub.load("https://tfhub.dev/google/movenet/singlepose/thunder/4")
-    return model
+    return model.signatures['serving_default']
 
 movenet = load_movenet()
 
-# --- 姿勢推定
+
+# --- 姿勢推定 ---
 def detect_keypoints(frame):
     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     input_image = tf.image.resize_with_pad(tf.expand_dims(img_rgb, axis=0), 256, 256)
-    input_image = tf.cast(input_image, dtype=tf.float32) / 255.0  # float32 + 正規化
-    outputs = movenet(input_image)
+    input_image = tf.cast(input_image, dtype=tf.int32)  # int32でOK
+    outputs = movenet(input_image)  # movenetは signatures['serving_default'] を使う
     keypoints = outputs['output_0'].numpy()[0,0,:,:]  # 17 keypoints
     return keypoints
+
 
 # --- 膝角度計算
 def calculate_angle(a, b, c):
@@ -105,3 +107,4 @@ if uploaded_file is not None:
             file_name="squat_result.mp4",
             mime="video/mp4"
         )
+
