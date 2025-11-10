@@ -1,46 +1,41 @@
 import streamlit as st
-import tensorflow as tf
-import tensorflow_hub as hub
-import numpy as np
 import cv2
 import tempfile
+import numpy as np
+import tensorflow as tf
+import tensorflow_hub as hub
+from PIL import Image, ImageDraw, ImageFont
 import os
 
-st.title("🏋️ スクワット姿勢解析アプリ")
-st.write("動画をアップロードすると、膝の角度を解析して注意コメントを表示します！")
+st.title("🏋️ スクワット姿勢解析アプリ（ダウンロード用）")
 
-# --- モデル読み込み（キャッシュ）
+# --- モデル読み込み ---
 @st.cache_resource
-def load_movenet():
+def load_model():
     model = hub.load("https://tfhub.dev/google/movenet/singlepose/thunder/4")
-    return model.signatures['serving_default']
+    return model
 
-movenet = load_movenet()
+movenet = load_model()
 
-
-# --- 姿勢推定 ---
 def detect_keypoints(frame):
-    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    input_image = tf.image.resize_with_pad(tf.expand_dims(img_rgb, axis=0), 256, 256)
-    input_image = tf.cast(input_image, dtype=tf.int32)  # int32でOK
-    outputs = movenet(input_image)  # movenetは signatures['serving_default'] を使う
-    keypoints = outputs['output_0'].numpy()[0,0,:,:]  # 17 keypoints
+    input_image = tf.image.resize_with_pad(tf.expand_dims(frame, axis=0), 256, 256)
+    input_image = tf.cast(input_image, dtype=tf.int32)
+    outputs = movenet(input_image)
+    keypoints = outputs['output_0'].numpy()[0,0,:,:]
     return keypoints
 
-
-# --- 膝角度計算
 def calculate_angle(a, b, c):
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
+    a, b, c = np.array(a), np.array(b), np.array(c)
     radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
     angle = np.abs(radians*180.0/np.pi)
     if angle > 180.0:
         angle = 360 - angle
     return angle
 
-# --- アップロード
+# --- モード選択 ---
 mode = st.radio("解析モードを選択", ("浅めモード", "深めモード"))
+
+# --- ファイルアップロード ---
 uploaded_file = st.file_uploader("動画をアップロードしてください", type=["mp4","mov","avi"])
 
 if uploaded_file is not None:
@@ -50,22 +45,31 @@ if uploaded_file is not None:
 
     cap = cv2.VideoCapture(tfile.name)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width = int(cap.get(3))
+    height = int(cap.get(4))
 
     out_path = os.path.join(tempfile.gettempdir(), "squat_result.mp4")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
 
-    stframe = st.empty()
-    st.write("🔍 解析中です。しばらくお待ちください…")
+    st.write("🔍 解析中です…")
+
+    # 日本語フォント設定
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    font = ImageFont.truetype(font_path, 32)
+
+    frame_idx = 0
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+        frame_idx += 1
 
-        keypoints = detect_keypoints(frame)
+        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        keypoints = detect_keypoints(img_rgb)
+
         left_hip = keypoints[11][:2] * [width, height]
         left_knee = keypoints[13][:2] * [width, height]
         left_ankle = keypoints[15][:2] * [width, height]
@@ -74,37 +78,32 @@ if uploaded_file is not None:
 
         # モード別コメント
         if mode == "浅めモード":
-            if angle <= 90:
-                text = f"深め注意！ {int(angle)}°"
-                color = (0,0,255)
-            else:
-                text = f"角度: {int(angle)}°"
-                color = (0,255,0)
+            comment = f"深め注意！ {int(angle)}°" if angle <= 90 else f"角度: {int(angle)}°"
         else:  # 深めモード
-            if angle < 80:
-                text = f"深めOK！ {int(angle)}°"
-                color = (0,255,0)
-            else:
-                text = f"もう少し深く {int(angle)}°"
-                color = (0,0,255)
+            comment = f"浅め注意！ {int(angle)}°" if angle >= 100 else f"角度: {int(angle)}°"
 
-        cv2.putText(frame, text, (50,100), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
-        out.write(frame)
-        stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB")
+        # Pillowで描画
+        pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
+        draw.text((50, 50), comment, font=font, fill=(255,0,0))
+        frame_with_text = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+        out.write(frame_with_text)
+
+        st.text(f"解析中: {frame_idx}/{frame_count} フレーム")
 
     cap.release()
     out.release()
 
     st.success("✅ 解析完了！")
 
-    # 動画再生とダウンロード
+    # ダウンロードボタンのみ
     with open(out_path, "rb") as f:
-        video_bytes = f.read()
-        st.video(video_bytes)
         st.download_button(
-            label="📥 結果動画をダウンロード",
-            data=video_bytes,
+            label="📥 解析動画をダウンロード",
+            data=f,
             file_name="squat_result.mp4",
             mime="video/mp4"
         )
+
 
