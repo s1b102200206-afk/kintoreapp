@@ -111,4 +111,3 @@ if uploaded_file is not None:
     # ダウンロードリンク
     with open(out_file.name, "rb") as f:
         st.download_button("解析動画をダウンロード", f, file_name="squat_analysis.mp4", mime="video/mp4")
-
