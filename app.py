@@ -6,7 +6,7 @@ import cv2
 import tempfile
 from moviepy.editor import ImageSequenceClip
 
-# --- MoveNet 読み込み ---
+# --- MoveNet読み込み ---
 @st.cache_resource
 def load_movenet():
     model = hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
@@ -75,7 +75,7 @@ def analyze_frame(frame, mode="shallow"):
     return cv2.cvtColor(orig, cv2.COLOR_BGR2RGB)
 
 # --- Streamlit UI ---
-st.title("スクワット姿勢解析アプリ（動画再生＋ダウンロード）")
+st.title("スクワット姿勢解析アプリ（動画再生＆ダウンロード）")
 mode = st.radio("解析モードを選択", ("shallow","deep"))
 uploaded_file = st.file_uploader("動画をアップロードしてください", type=["mp4","mov","avi"])
 
@@ -98,21 +98,17 @@ if uploaded_file is not None:
         progress_text.text(f"解析中: {i+1}/{frame_count} フレーム")
     cap.release()
 
-    # MoviePy で動画に変換
+    # MoviePy で動画化
     out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     clip = ImageSequenceClip(frames, fps=fps)
-    clip.write_videofile(out_file.name, codec='libx264', audio=False)
+    clip.write_videofile(out_file.name, codec='libx264', audio=False, verbose=False, logger=None)
 
     st.success("動画解析完了！")
 
-    # 再生
+    # 動画再生
     st.video(out_file.name)
 
     # ダウンロードリンク
     with open(out_file.name, "rb") as f:
-        st.download_button(
-            label="解析動画をダウンロード",
-            data=f,
-            file_name="squat_analysis.mp4",
-            mime="video/mp4"
-        )
+        st.download_button("解析動画をダウンロード", f, file_name="squat_analysis.mp4", mime="video/mp4")
+
