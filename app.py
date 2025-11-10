@@ -3,7 +3,6 @@ import tensorflow as tf
 import tensorflow_hub as hub
 import numpy as np
 import cv2
-from PIL import Image
 import tempfile
 
 # --- MoveNet読み込み ---
@@ -22,7 +21,7 @@ def calculate_angle(a, b):
     cosine_angle = np.dot(spine, vertical) / (np.linalg.norm(spine) * np.linalg.norm(vertical) + 1e-6)
     return np.degrees(np.arccos(np.clip(cosine_angle, -1.0, 1.0)))
 
-# --- フレーム解析関数 ---
+# --- フレーム解析 ---
 def analyze_frame(frame, mode="shallow"):
     orig = frame.copy()
     img_resized = tf.image.resize_with_pad(tf.convert_to_tensor(frame), 192, 192)
@@ -49,7 +48,7 @@ def analyze_frame(frame, mode="shallow"):
                (points["left_hip"][1]+points["right_hip"][1])/2)
     back_angle = calculate_angle(mid_shoulder, mid_hip)
 
-    # コメント生成（浅めモード対応）
+    # コメント生成
     if mode=="shallow":
         if knee_angle <= 90:
             knee_comment = "深め注意"
@@ -85,6 +84,7 @@ uploaded_file = st.file_uploader("動画をアップロードしてください"
 if uploaded_file is not None:
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     tfile.write(uploaded_file.read())
+    tfile.close()
     
     cap = cv2.VideoCapture(tfile.name)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -93,12 +93,12 @@ if uploaded_file is not None:
 
     # 出力動画
     out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264形式
     out = cv2.VideoWriter(out_file.name, fourcc, fps, (w,h))
 
-    progress_text = st.empty()
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
+    progress_text = st.empty()
+
     for i in range(frame_count):
         ret, frame = cap.read()
         if not ret:
@@ -106,9 +106,9 @@ if uploaded_file is not None:
         frame = analyze_frame(frame, mode)
         out.write(frame)
         progress_text.text(f"解析中: {i+1}/{frame_count} フレーム")
-    
+
     cap.release()
     out.release()
-    
+
     st.success("動画解析が完了しました！")
     st.video(out_file.name)
