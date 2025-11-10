@@ -1,6 +1,4 @@
-streamlit>=1.25.0
-tensorflow>=2.19.0
-tensorflow-hub>=0.13.0
-opencv-python>=4.7.0
-numpy>=1.25.0
-
+streamlit
+tensorflow
+tensorflow-hub
+opencv-python
