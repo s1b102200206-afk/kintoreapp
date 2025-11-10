@@ -1,22 +1,18 @@
-# --- ライブラリインストール ---
-!pip install -q tensorflow tensorflow-hub opencv-python
-!apt-get -y install fonts-noto-cjk
-
-# --- ライブラリインポート ---
+import streamlit as st
 import tensorflow as tf
 import tensorflow_hub as hub
 import numpy as np
 import cv2
-from google.colab import files
 from PIL import Image, ImageDraw, ImageFont
-
-# --- 動画アップロード ---
-uploaded = files.upload()
-video_path = next(iter(uploaded))
+import tempfile
 
 # --- MoveNet読み込み ---
-model = hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
-movenet = model.signatures['serving_default']
+@st.cache_resource
+def load_movenet():
+    model = hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
+    return model.signatures['serving_default']
+
+movenet = load_movenet()
 
 # --- 角度計算関数 ---
 def calculate_angle(a, b):
@@ -41,11 +37,11 @@ def analyze_frame(frame, mode="shallow"):
         points[name] = (keypoints[idx][1]*w, keypoints[idx][0]*h, keypoints[idx][2])
     conf_thresh = 0.1
 
-    # 膝角度
     def angle(a,b,c):
         a,b,c = np.array(a[:2]), np.array(b[:2]), np.array(c[:2])
         ba, bc = a-b, c-b
         return np.degrees(np.arccos(np.clip(np.dot(ba,bc)/(np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6), -1.0, 1.0)))
+
     knee_angle = angle(points["left_hip"], points["left_knee"], points["left_ankle"])
     mid_shoulder = ((points["left_shoulder"][0]+points["right_shoulder"][0])/2,
                     (points["left_shoulder"][1]+points["right_shoulder"][1])/2)
@@ -53,61 +49,55 @@ def analyze_frame(frame, mode="shallow"):
                (points["left_hip"][1]+points["right_hip"][1])/2)
     back_angle = calculate_angle(mid_shoulder, mid_hip)
 
-    # コメント生成
+    # コメント生成（膝角度の判定を修正）
     if mode=="shallow":
-        knee_comment = "浅めOK" if knee_angle>100 else "少し浅め" if knee_angle>70 else "しゃがみすぎ注意"
+        if knee_angle <= 90:
+            knee_comment = "深め注意"
+        else:
+            knee_comment = "浅めOK" if knee_angle > 100 else "少し浅め"
     else:
-        knee_comment = "深めOK" if knee_angle<80 else "もう少し深く" if knee_angle<100 else "浅すぎ"
-    back_comment = "背中まっすぐ" if back_angle<15 else f"背中曲がり({int(back_angle)}°)"
+        knee_comment = "深めOK" if knee_angle < 80 else "もう少し深く" if knee_angle < 100 else "浅すぎ"
+
+    back_comment = "背中まっすぐ" if back_angle < 15 else f"背中曲がり({int(back_angle)}°)"
 
     # 関節描画
     for pt in points.values():
-        if pt[2]>conf_thresh: cv2.circle(orig, tuple(map(int, pt[:2])), 5, (0,255,0), -1)
+        if pt[2] > conf_thresh: 
+            cv2.circle(orig, tuple(map(int, pt[:2])), 5, (0,255,0), -1)
     bones = [("left_shoulder","left_hip"),("right_shoulder","right_hip"),
              ("left_hip","left_knee"),("left_knee","left_ankle"),
              ("right_hip","right_knee"),("right_knee","right_ankle")]
     for a,b in bones:
-        if points[a][2]>conf_thresh and points[b][2]>conf_thresh:
+        if points[a][2] > conf_thresh and points[b][2] > conf_thresh:
             cv2.line(orig, tuple(map(int, points[a][:2])), tuple(map(int, points[b][:2])), (255,0,0), 2)
     cv2.line(orig, tuple(map(int, mid_shoulder)), tuple(map(int, mid_hip)), (0,0,255), 2)
 
     return orig, (knee_comment, back_comment)
 
-# --- モード選択 ---
-mode=""
-while mode not in ["shallow","deep"]:
-    mode=input("スクワット解析モード (shallow/deep): ").strip().lower()
+# --- Streamlit UI ---
+st.title("スクワット姿勢解析アプリ")
+mode = st.radio("解析モードを選択", ("shallow", "deep"))
 
-# --- 動画処理 ---
-cap = cv2.VideoCapture(video_path)
-fps = cap.get(cv2.CAP_PROP_FPS)/2  # FPS半分で軽量化
-orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-w_new = 320
-h_new = int(orig_h * w_new / orig_w)
+uploaded_file = st.file_uploader("動画をアップロードしてください", type=["mp4", "mov", "avi"])
 
-fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-output_path = "/content/squat_analysis_small.mp4"
-out = cv2.VideoWriter(output_path, fourcc, fps, (w_new,h_new))
+if uploaded_file is not None:
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(uploaded_file.read())
+    cap = cv2.VideoCapture(tfile.name)
 
-font_path = "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"
-font = ImageFont.truetype(font_path, 20)
+    stframe = st.empty()
 
-while True:
-    ret, frame = cap.read()
-    if not ret: break
-    frame = cv2.resize(frame, (w_new, h_new))
-    result_img, comments = analyze_frame(frame, mode)
-    knee_comment, back_comment = comments
-    img_pil = Image.fromarray(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(img_pil)
-    draw.text((10,10), f"下半身: {knee_comment}", fill=(0,0,255), font=font)
-    draw.text((10,40), f"上半身: {back_comment}", fill=(255,0,0), font=font)
-    out.write(cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR))
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame = cv2.resize(frame, (320, int(frame.shape[0]*320/frame.shape[1])))
+        result_img, comments = analyze_frame(frame, mode)
+        knee_comment, back_comment = comments
 
-cap.release()
-out.release()
-print(f"動画解析完了: {output_path}")
+        # Streamlitで表示
+        stframe.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), channels="RGB")
+        st.text(f"下半身: {knee_comment} / 上半身: {back_comment}")
 
-# --- 動画をPCにダウンロード ---
-files.download(output_path)
+    cap.release()
+    st.success("動画解析が完了しました！")
