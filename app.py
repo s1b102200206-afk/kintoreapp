@@ -49,7 +49,7 @@ def analyze_frame(frame, mode="shallow"):
                (points["left_hip"][1]+points["right_hip"][1])/2)
     back_angle = calculate_angle(mid_shoulder, mid_hip)
 
-    # コメント生成
+    # コメント生成（浅めモードで膝90°以下なら深め注意）
     if mode=="shallow":
         knee_comment = "深め注意" if knee_angle <= 90 else "浅めOK" if knee_angle > 100 else "少し浅め"
     else:
@@ -108,7 +108,3 @@ if uploaded_file is not None:
     clip.write_videofile(out_file.name, codec="libx264", audio=False)
     
     st.video(out_file.name)
-
-
-   
-
