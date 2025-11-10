@@ -1,6 +1,6 @@
 streamlit
 tensorflow
 tensorflow-hub
-opencv-python-headless
+opencv-python
+moviepy
 numpy
-Pillow
